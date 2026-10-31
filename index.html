@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Weekly Uni Overview</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <button id="prev" aria-label="Previous week">&larr;</button>
+    <div class="title">
+      <h1 id="week-title"></h1>
+      <p id="week-range"></p>
+    </div>
+    <button id="next" aria-label="Next week">&rarr;</button>
+  </header>
+  <p id="status"></p>
+  <p class="auth"><button id="auth-btn" hidden></button></p>
+  <main id="courses"></main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
