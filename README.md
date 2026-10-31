@@ -3,7 +3,8 @@
 Static site showing this week's to-dos per course. Click an item to mark it done.
 
 ## Edit tasks
-Everything lives in `data.js` (semester start, courses, recurring tasks, per-week `overrides`, NLO tutorial dates).
+Each person has a profile file: `profiles/pablo.js`, `profiles/tabea.js` (semester start, courses, recurring tasks, per-week `overrides`, tutorial dates).
+`profiles.js` maps each allowed Google email to a profile. To add someone: create a profile file, add their email to `profiles.js`, and add it to the Firestore rules below.
 
 ## Firebase sync (cross-device)
 1. Create a project at https://console.firebase.google.com and add a **Web app**.
@@ -19,13 +20,13 @@ Everything lives in `data.js` (semester start, courses, recurring tasks, per-wee
        match /users/{uid}/progress/{week} {
          allow read, write: if request.auth != null
            && request.auth.uid == uid
-           && request.auth.token.email == "pabletegymgm@gmail.com"
+           && request.auth.token.email in ["pabletegymgm@gmail.com", "tslandau23@gmail.com"]
            && request.auth.token.email_verified == true;
        }
      }
    }
    ```
-   The email is also set as `ALLOWED_EMAIL` in `firebase-config.js` (the app signs out anyone else).
+   The same emails are listed in `profiles.js` (the app signs out anyone else).
    Note: the page itself is public on GitHub Pages; the rules are what protect the data.
 
 Until the config is filled in, checkmarks are kept in the browser's localStorage.

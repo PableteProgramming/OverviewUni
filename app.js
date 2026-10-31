@@ -1,29 +1,65 @@
-import { SEMESTER_START, LAST_WEEK, NLO_TUTORIAL_DATES, courses, overrides } from "./data.js";
-import { firebaseConfig, ALLOWED_EMAIL } from "./firebase-config.js";
+import { profiles, LOCAL_PROFILE } from "./profiles.js";
+import { firebaseConfig } from "./firebase-config.js";
 
 const DAY = 86400000;
 const parseDate = (s) => new Date(s + "T00:00:00");
-const start = parseDate(SEMESTER_START);
-const weekStart = (w) => new Date(start.getTime() + (w - 1) * 7 * DAY);
-const fmt = (d) => d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+const $ = (id) => document.getElementById(id);
+function setStatus(msg) { $("status").textContent = msg; }
+
+// UI texts per language. A profile picks one with `lang`; English is the default (also before login).
+const STRINGS = {
+  en: {
+    locale: "en-GB", appTitle: "Weekly Uni Overview", week: "Week", thisWeek: "this week",
+    due: "due next week", online: "online", weekend: "weekend", empty: "No courses set up yet.",
+    signIn: "Sign in with Google", signOut: "Sign out",
+    signInPrompt: "Sign in with Google to see and save your progress.",
+    denied: (email) => `Access denied: ${email} is not an allowed account.`,
+    signInFailed: "Sign-in failed: ", syncError: "Sync error: ",
+    local: "Local mode: add your Firebase config in firebase-config.js to sync across devices.",
+  },
+  de: {
+    locale: "de-DE", appTitle: "Wochenübersicht Uni", week: "Woche", thisWeek: "diese Woche",
+    due: "Abgabe nächste Woche", online: "online", weekend: "Wochenende", empty: "Noch keine Kurse eingerichtet.",
+    signIn: "Mit Google anmelden", signOut: "Abmelden",
+    signInPrompt: "Melde dich mit Google an, um deinen Fortschritt zu sehen und zu speichern.",
+    denied: (email) => `Zugriff verweigert: ${email} ist kein erlaubtes Konto.`,
+    signInFailed: "Anmeldung fehlgeschlagen: ", syncError: "Synchronisierungsfehler: ",
+    local: "Lokaler Modus: Firebase-Konfiguration in firebase-config.js eintragen, um geräteübergreifend zu synchronisieren.",
+  },
+};
+let L = STRINGS.en;
+const fmt = (d) => d.toLocaleDateString(L.locale, { day: "numeric", month: "short" });
+
+// The profile (courses, semester dates) of whoever is signed in; null when nobody is.
+let P = null;
+let week = 1;
+function setProfile(profile) {
+  P = profile;
+  L = STRINGS[P?.lang] ?? STRINGS.en;
+  document.documentElement.lang = P?.lang ?? "en";
+  document.title = L.appTitle;
+}
+
+const startDate = () => parseDate(P.semesterStart);
+const weekStart = (w) => new Date(startDate().getTime() + (w - 1) * 7 * DAY);
 
 function currentWeek() {
-  const w = Math.floor((Date.now() - start.getTime()) / (7 * DAY)) + 1;
-  return Math.min(Math.max(w, 1), LAST_WEEK);
+  const w = Math.floor((Date.now() - startDate().getTime()) / (7 * DAY)) + 1;
+  return Math.min(Math.max(w, 1), P.lastWeek);
 }
 
-function tutorialDateIn(week) {
-  const a = weekStart(week).getTime(), b = a + 7 * DAY;
-  return NLO_TUTORIAL_DATES.find((d) => { const t = parseDate(d).getTime(); return t >= a && t < b; });
+function tutorialDateIn(w) {
+  const a = weekStart(w).getTime(), b = a + 7 * DAY;
+  return P.tutorialDates.find((d) => { const t = parseDate(d).getTime(); return t >= a && t < b; });
 }
 
-function tasksFor(course, week) {
-  const ov = overrides[week]?.[course.id] ?? {};
+function tasksFor(course, w) {
+  const ov = P.overrides[w]?.[course.id] ?? {};
   let tasks = course.tasks.filter((t) => !(ov.remove ?? []).includes(t.key));
-  tasks = tasks.filter((t) => !t.onlyOnTutorialWeek || tutorialDateIn(week));
+  tasks = tasks.filter((t) => !t.onlyOnTutorialWeek || tutorialDateIn(w));
   return tasks.concat(ov.add ?? []).map((t) => {
     if (t.onlyOnTutorialWeek) {
-      const d = fmt(parseDate(tutorialDateIn(week)));
+      const d = fmt(parseDate(tutorialDateIn(w)));
       return { ...t, label: `${t.label} - ${d}` };
     }
     return t;
@@ -39,17 +75,16 @@ let store;
 async function initStore() {
   if (!useFirebase) {
     store = {
-      subscribe(week, cb) {
-        const read = () => cb(JSON.parse(localStorage.getItem("week-" + week) || "{}"));
-        read(); return () => {};
-      },
-      async set(week, id, value) {
-        const cur = JSON.parse(localStorage.getItem("week-" + week) || "{}");
+      subscribe(w, cb) { cb(JSON.parse(localStorage.getItem("week-" + w) || "{}")); return () => {}; },
+      async set(w, id, value) {
+        const cur = JSON.parse(localStorage.getItem("week-" + w) || "{}");
         if (value) cur[id] = true; else delete cur[id];
-        localStorage.setItem("week-" + week, JSON.stringify(cur));
+        localStorage.setItem("week-" + w, JSON.stringify(cur));
       },
     };
-    setStatus("Local mode: add your Firebase config in firebase-config.js to sync across devices.");
+    setProfile(LOCAL_PROFILE);
+    week = currentWeek();
+    setStatus(L.local);
     return;
   }
   const base = "https://www.gstatic.com/firebasejs/10.12.2/";
@@ -60,49 +95,61 @@ async function initStore() {
   const db = getFirestore(fbApp);
   const auth = getAuth(fbApp);
   let uid = null;
-  const weekDoc = (week) => doc(db, "users", uid, "progress", "week-" + week);
+  const weekDoc = (w) => doc(db, "users", uid, "progress", "week-" + w);
   store = {
-    subscribe(week, cb) {
-      if (!uid) { cb({}); setStatus("Sign in with Google to see and save your progress."); return () => {}; }
-      return onSnapshot(weekDoc(week),
+    subscribe(w, cb) {
+      if (!uid) { cb({}); setStatus(L.signInPrompt); return () => {}; }
+      return onSnapshot(weekDoc(w),
         (snap) => { cb(snap.data() ?? {}); setStatus(""); },
-        (err) => setStatus("Sync error: " + err.message));
+        (err) => setStatus(L.syncError + err.message));
     },
-    async set(week, id, value) {
+    async set(w, id, value) {
       if (!uid) return;
-      if (value) await setDoc(weekDoc(week), { [id]: true }, { merge: true });
-      else await updateDoc(weekDoc(week), { [id]: deleteField() }).catch(() => {});
+      if (value) await setDoc(weekDoc(w), { [id]: true }, { merge: true });
+      else await updateDoc(weekDoc(w), { [id]: deleteField() }).catch(() => {});
     },
   };
   const btn = $("auth-btn");
   btn.hidden = false;
-  btn.onclick = () => (uid ? signOut(auth) : signInWithPopup(auth, new GoogleAuthProvider()).catch((e) => setStatus("Sign-in failed: " + e.message)));
+  btn.onclick = () => (uid ? signOut(auth) : signInWithPopup(auth, new GoogleAuthProvider()).catch((e) => setStatus(L.signInFailed + e.message)));
   onAuthStateChanged(auth, (user) => {
-    if (user && user.email?.toLowerCase() !== ALLOWED_EMAIL.toLowerCase()) {
-      signOut(auth).then(() => setStatus(`Access denied: ${user.email} is not the owner account.`));
+    const profile = user ? profiles[user.email?.toLowerCase()] : null;
+    if (user && !profile) {
+      setProfile(null);
+      signOut(auth).then(() => setStatus(L.denied(user.email)));
       return;
     }
     uid = user?.uid ?? null;
-    btn.textContent = user ? `Sign out (${user.displayName ?? user.email})` : "Sign in with Google";
-    showWeek(week);
+    setProfile(profile ?? null);
+    btn.textContent = user ? `${L.signOut} (${user.displayName ?? user.email})` : L.signIn;
+    showWeek(P ? currentWeek() : 1);
   });
 }
 
 // ---- rendering ----
-let week = currentWeek();
-const $ = (id) => document.getElementById(id);
-function setStatus(msg) { $("status").textContent = msg; }
-
 function render() {
-  $("week-title").textContent = `Week ${week}` + (week === currentWeek() ? " (this week)" : "");
+  const main = $("courses");
+  main.innerHTML = "";
+  if (!P) {
+    $("week-title").textContent = L.appTitle;
+    $("week-range").textContent = "";
+    $("prev").disabled = $("next").disabled = true;
+    return;
+  }
+  $("week-title").textContent = `${L.week} ${week}` + (week === currentWeek() ? ` (${L.thisWeek})` : "");
   const s = weekStart(week), e = new Date(s.getTime() + 6 * DAY);
   $("week-range").textContent = `${fmt(s)} – ${fmt(e)}`;
   $("prev").disabled = week <= 1;
-  $("next").disabled = week >= LAST_WEEK;
+  $("next").disabled = week >= P.lastWeek;
 
-  const main = $("courses");
-  main.innerHTML = "";
-  for (const course of courses) {
+  if (P.courses.length === 0) {
+    const p = document.createElement("p");
+    p.className = "empty";
+    p.textContent = L.empty;
+    main.appendChild(p);
+    return;
+  }
+  for (const course of P.courses) {
     const tasks = tasksFor(course, week);
     const card = document.createElement("section");
     card.className = "card";
@@ -118,8 +165,12 @@ function render() {
       li.className = isDone ? "done" : "";
       li.innerHTML = `<span class="box"></span><span class="label"></span>`;
       li.querySelector(".label").textContent = t.label;
-      if (t.kind === "due") li.insertAdjacentHTML("beforeend", `<span class="tag">due next week</span>`);
-      if (t.kind === "online") li.insertAdjacentHTML("beforeend", `<span class="tag">online</span>`);
+      if (L[t.kind] && ["due", "online", "weekend"].includes(t.kind)) {
+        const tag = document.createElement("span");
+        tag.className = "tag";
+        tag.textContent = L[t.kind];
+        li.appendChild(tag);
+      }
       li.onclick = () => {
         const value = !done[id];
         if (value) done[id] = true; else delete done[id];
@@ -138,6 +189,7 @@ function showWeek(w) {
   unsubscribe?.();
   done = {};
   render();
+  if (!P) return;
   unsubscribe = store.subscribe(week, (data) => { done = data; render(); });
 }
 
