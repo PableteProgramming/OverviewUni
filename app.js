@@ -180,7 +180,11 @@ function render() {
         const value = !done[id];
         if (value) done[id] = true; else delete done[id];
         render();
-        store.set(week, id, value);
+        // Surface failed writes (e.g. Firestore rules rejecting them) instead of silently losing the tick.
+        Promise.resolve(store.set(week, id, value)).catch((err) => {
+          console.error("Saving failed", err);
+          setStatus(L.syncError + (err?.code ? err.code + ": " : "") + (err?.message ?? err));
+        });
       };
       ul.appendChild(li);
     }
