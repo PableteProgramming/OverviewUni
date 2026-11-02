@@ -41,15 +41,20 @@ function setProfile(profile) {
 }
 
 const startDate = () => parseDate(P.semesterStart);
-const weekStart = (w) => new Date(startDate().getTime() + (w - 1) * 7 * DAY);
+// Calendar-day arithmetic (not "+ n * 24h"), so weeks stay Monday-aligned across DST changes.
+const addDays = (d, n) => { const r = new Date(d); r.setDate(r.getDate() + n); return r; };
+const weekStart = (w) => addDays(startDate(), (w - 1) * 7);
 
 function currentWeek() {
-  const w = Math.floor((Date.now() - startDate().getTime()) / (7 * DAY)) + 1;
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const days = Math.round((today - startDate()) / DAY); // round absorbs the DST hour
+  const w = Math.floor(days / 7) + 1;
   return Math.min(Math.max(w, 1), P.lastWeek);
 }
 
 function tutorialDateIn(w) {
-  const a = weekStart(w).getTime(), b = a + 7 * DAY;
+  const a = weekStart(w).getTime(), b = weekStart(w + 1).getTime();
   return P.tutorialDates.find((d) => { const t = parseDate(d).getTime(); return t >= a && t < b; });
 }
 
@@ -137,7 +142,7 @@ function render() {
     return;
   }
   $("week-title").textContent = `${L.week} ${week}` + (week === currentWeek() ? ` (${L.thisWeek})` : "");
-  const s = weekStart(week), e = new Date(s.getTime() + 6 * DAY);
+  const s = weekStart(week), e = addDays(s, 6);
   $("week-range").textContent = `${fmt(s)} – ${fmt(e)}`;
   $("prev").disabled = week <= 1;
   $("next").disabled = week >= P.lastWeek;
